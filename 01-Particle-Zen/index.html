@@ -2,17 +2,23 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>2026 粒子特效 - AR 修正版</title>
+    <title>2026 Cyberpunk AR Experience</title>
     <style>
+        :root {
+            --neon-blue: #00f2ff;
+            --neon-purple: #bc13fe;
+            --glass-bg: rgba(255, 255, 255, 0.1);
+        }
+
         body {
             margin: 0;
             padding: 0;
-            background-color: #000;
+            background-color: #050505;
             overflow: hidden;
-            font-family: 'Arial', sans-serif;
+            font-family: 'Exo 2', 'Orbitron', sans-serif;
         }
         
-        /* 1. 視訊維持鏡像翻轉，這樣操作才像照鏡子 */
+        /* 視訊背景 - 加入微弱的掃描線濾鏡感 */
         #video-element {
             position: absolute;
             top: 0;
@@ -20,55 +26,78 @@
             width: 100vw;
             height: 100vh;
             object-fit: cover;
-            transform: scaleX(-1); /* 鏡像 */
+            transform: scaleX(-1);
             z-index: 1;
+            filter: brightness(0.7) contrast(1.2);
         }
 
-        /* 2. 修正點：Canvas 取消翻轉，讓文字顯示為正 */
         canvas {
             display: block;
             position: absolute;
             top: 0;
             left: 0;
             z-index: 2;
-            /* 移除 transform: scaleX(-1); */
+            mix-blend-mode: screen; /* 讓粒子發光效果更好 */
         }
 
+        /* 質感 Loading 介面 */
         #loading {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: #fff;
-            /* font-size: 24px; */
-            font-size: 100px;
-            text-shadow: 0 0 10px rgba(0,0,0,0.8);
+            color: var(--neon-blue);
+            font-size: 24px;
+            letter-spacing: 5px;
+            text-align: center;
             z-index: 10;
+            text-transform: uppercase;
+            text-shadow: 0 0 20px var(--neon-blue);
         }
-        .instruction {
+
+        /* 未來感邊框 UI */
+        .hud-overlay {
             position: absolute;
-            bottom: 20px;
-            right: 20px;
-            color: #fff;
-            font-weight: bold;
-            text-shadow: 0 0 5px #000;
-            z-index: 3;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             pointer-events: none;
+            z-index: 3;
+            border: 1px solid rgba(0, 242, 255, 0.2);
+            box-sizing: border-box;
+            background: 
+                radial-gradient(circle at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.4) 100%),
+                linear-gradient(0deg, rgba(0, 242, 255, 0.05) 1px, transparent 1px) center / 100% 40px,
+                linear-gradient(90deg, rgba(0, 242, 255, 0.05) 1px, transparent 1px) center / 40px 100%;
+        }
+
+        .status-bar {
+            position: absolute;
+            top: 40px;
+            right: 40px;
+            color: var(--neon-blue);
             text-align: right;
+            font-size: 12px;
+            letter-spacing: 2px;
+            z-index: 4;
         }
     </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
-<div id="loading">系統載入中...<br>請允許攝影機權限</div>
-<!-- <div class="instruction">
-    手勢控制：比出 1-5 顯示數字<br>
-    特效觸發：握拳 -> 張開手掌
-</div> -->
+<div id="loading">Initialising Neural Link...<br><span style="font-size: 14px; opacity: 0.7;">Waiting for Camera Access</span></div>
+
+<div class="hud-overlay"></div>
+<div class="status-bar">
+    SYSTEM: ACTIVE<br>
+    NEURAL_INTERACTION: ENABLED<br>
+    <span id="gesture-name">SCANNING...</span><br>
+    <span id="fps-counter">FPS: --</span>
+</div>
 
 <video id="video-element"></video>
 <canvas id="canvas"></canvas>
@@ -77,11 +106,35 @@
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     let width, height;
-    
     let particles = [];
     let particleText = "";
     let isExploded = false; 
-    let hue = 0; 
+    let globalHue = 190; // 電子藍冷色調
+    
+    // FPS 性能監控
+    let frameCount = 0;
+    let lastTime = performance.now();
+    let fps = 0;
+    const fpsCounter = document.getElementById('fps-counter');
+    
+    function updateFPS() {
+        frameCount++;
+        const currentTime = performance.now();
+        if (currentTime - lastTime >= 1000) {
+            fps = Math.round((frameCount * 1000) / (currentTime - lastTime));
+            frameCount = 0;
+            lastTime = currentTime;
+            fpsCounter.textContent = `FPS: ${fps}`;
+            // 根據FPS改變顏色提示性能狀態
+            if (fps < 30) {
+                fpsCounter.style.color = '#ff5555';
+            } else if (fps < 50) {
+                fpsCounter.style.color = '#ffaa00';
+            } else {
+                fpsCounter.style.color = '#55ff55';
+            }
+        }
+    }
 
     function resize() {
         width = canvas.width = window.innerWidth;
@@ -98,10 +151,12 @@
             this.targetY = y;
             this.vx = 0;
             this.vy = 0;
-            this.size = Math.random() * 3 + 2; 
-            this.color = `hsl(${Math.random() * 60 + 10}, 100%, 70%)`; 
-            this.friction = 0.93;
-            this.ease = 0.15;
+            this.size = Math.random() * 2 + 1.5;
+            this.baseColor = globalHue;
+            this.color = `hsla(${this.baseColor}, 100%, 70%, 0.8)`;
+            this.friction = 0.1; // 數值越小，停止得越快，不拖泥帶水。
+            this.ease = 1; // 數值越大，粒子往目標衝刺的力量越強
+            this.shimmer = Math.random() * 0.1;
         }
 
         update() {
@@ -116,21 +171,31 @@
             this.x += this.vx;
             this.y += this.vy;
             
-            if (isExploded) {
-               this.color = `hsl(${hue + Math.random() * 60}, 100%, 60%)`;
+            // 優化：減少三角函數計算頻率，每10幀更新一次顏色
+            if (Math.random() < 0.1) { // 10% 機率更新顏色
+                const brightness = 70 + Math.sin(Date.now() * 0.01 + this.shimmer) * 20;
+                if (isExploded) {
+                    this.color = `hsla(${(globalHue + Math.random() * 40) % 360}, 100%, ${brightness}%, 0.9)`;
+                } else {
+                    this.color = `hsla(${globalHue}, 100%, ${brightness}%, 0.8)`;
+                }
             }
         }
 
         draw() {
+            // 減少陰影效果以優化性能
+            ctx.shadowBlur = isExploded ? 8 : 3;
+            ctx.shadowColor = this.color;
             ctx.fillStyle = this.color;
             ctx.beginPath();
-            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            // 使用矩形稍微增加數位感 (Digital Square)
+            ctx.rect(this.x, this.y, this.size, this.size);
             ctx.fill();
         }
     }
 
     function createTextParticles(text, isFinal = false) {
-        if (text === particleText) return;
+        if (text === particleText && !isFinal) return;
         particleText = text;
 
         const tCanvas = document.createElement('canvas');
@@ -138,22 +203,21 @@
         tCanvas.width = width;
         tCanvas.height = height;
 
-        let fontSize = isFinal ? Math.min(width / 10, 150) : Math.min(width / 2, 400);
-        tCtx.font = `900 ${fontSize}px Arial`;
-        tCtx.fillStyle = 'white';
+        let fontSize = isFinal ? Math.min(width / 12, 120) : Math.min(width / 2.5, 350);
+        tCtx.font = `900 ${fontSize}px Orbitron`;
         tCtx.textAlign = 'center';
         tCtx.textBaseline = 'middle';
         
         if (isFinal) {
-            tCtx.fillText("Happy New Year", width / 2, height / 2 - fontSize * 0.6);
-            tCtx.fillText("2026", width / 2, height / 2 + fontSize * 0.6);
+            tCtx.fillText("HAPPY NEW YEAR", width / 2, height / 2 - fontSize * 0.7);
+            tCtx.fillText("2026", width / 2, height / 2 + fontSize * 0.7);
         } else {
             tCtx.fillText(text, width / 2, height / 2);
         }
 
         const imageData = tCtx.getImageData(0, 0, width, height).data;
         const newTargets = [];
-        const gap = 6; 
+        const gap = isFinal ? 50 : 20; // 減少粒子數量一半以優化性能
 
         for (let y = 0; y < height; y += gap) {
             for (let x = 0; x < width; x += gap) {
@@ -164,33 +228,37 @@
             }
         }
 
+        // 平滑增減粒子
         if (particles.length < newTargets.length) {
-            const diff = newTargets.length - particles.length;
-            for (let i = 0; i < diff; i++) {
+            for (let i = particles.length; i < newTargets.length; i++) {
                 particles.push(new Particle(width/2, height/2));
             }
         } else if (particles.length > newTargets.length) {
             particles.splice(newTargets.length);
         }
 
-        if (isFinal) {
-             newTargets.sort(() => Math.random() - 0.5);
-        }
+        // 打亂順序讓粒子飛散更自然
+        const shuffledTargets = [...newTargets].sort(() => Math.random() - 0.5);
 
         particles.forEach((p, i) => {
-            p.targetX = newTargets[i].x;
-            p.targetY = newTargets[i].y;
+            p.targetX = shuffledTargets[i].x;
+            p.targetY = shuffledTargets[i].y;
             if (isFinal) {
-                p.vx = (Math.random() - 0.5) * 50;
-                p.vy = (Math.random() - 0.5) * 50;
+                p.vx += (Math.random() - 0.5) * 60;
+                p.vy += (Math.random() - 0.5) * 60;
             }
         });
     }
 
     function animate() {
-        ctx.clearRect(0, 0, width, height);
+        // 更新FPS計數
+        updateFPS();
+        
+        // 殘影效果：用半透明黑刷掉背景
+        ctx.fillStyle = 'rgba(5, 5, 5, 0.2)';
+        ctx.fillRect(0, 0, width, height);
 
-        hue += 2;
+        if (isExploded) globalHue += 0.5;
 
         particles.forEach(p => {
             p.update();
@@ -205,6 +273,7 @@
 
     function onResults(results) {
         document.getElementById('loading').style.display = 'none';
+        const gestureText = document.getElementById('gesture-name');
 
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             const landmarks = results.multiHandLandmarks[0];
@@ -213,21 +282,29 @@
             if (!isExploded) {
                 if (fingers === 0) {
                     handClosedState = true;
+                    gestureText.innerText = "STATUS: READY TO LAUNCH";
+                    gestureText.style.color = "#ff0055";
                     createTextParticles("Ready?");
                 } 
                 else if (handClosedState && fingers === 5) {
                     isExploded = true;
+                    gestureText.innerText = "STATUS: CELEBRATING";
+                    gestureText.style.color = "#bc13fe";
                     createTextParticles("2026", true);
                 } 
                 else {
                     handClosedState = false;
+                    gestureText.innerText = `INPUT_DETECTED: ${fingers}`;
+                    gestureText.style.color = "var(--neon-blue)";
                     if (fingers > 0) {
                         createTextParticles(fingers.toString());
                     } else {
-                         createTextParticles(""); 
+                        createTextParticles(""); 
                     }
                 }
             }
+        } else {
+            gestureText.innerText = "STATUS: NO SIGNAL";
         }
     }
 
@@ -235,49 +312,26 @@
         let count = 0;
         const tips = [8, 12, 16, 20]; 
         const pips = [6, 10, 14, 18];
-
         for (let i = 0; i < 4; i++) {
-            if (landmarks[tips[i]].y < landmarks[pips[i]].y) {
-                count++;
-            }
+            if (landmarks[tips[i]].y < landmarks[pips[i]].y) count++;
         }
-
         const thumbTip = landmarks[4];
         const thumbIp = landmarks[3];
         const pinkyMcp = landmarks[17];
-        
-        const tipDist = Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y);
-        const ipDist = Math.hypot(thumbIp.x - pinkyMcp.x, thumbIp.y - pinkyMcp.y);
-        
-        if (tipDist > ipDist) {
-            count++;
-        }
-
+        if (Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y) > 
+            Math.hypot(thumbIp.x - pinkyMcp.x, thumbIp.y - pinkyMcp.y)) count++;
         return count;
     }
 
-    const hands = new Hands({locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-    }});
-
-    hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7
-    });
-
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
     hands.onResults(onResults);
 
     const camera = new Camera(videoElement, {
-        onFrame: async () => {
-            await hands.send({image: videoElement});
-        },
-        width: 1280,
-        height: 720
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 1280, height: 720
     });
     camera.start();
-
 </script>
 </body>
 </html>
