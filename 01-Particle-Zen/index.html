@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>2026 粒子特效 - AR 修正版</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+        
+        /* 1. 視訊維持鏡像翻轉，這樣操作才像照鏡子 */
+        #video-element {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1); /* 鏡像 */
+            z-index: 1;
+        }
+
+        /* 2. 修正點：Canvas 取消翻轉，讓文字顯示為正 */
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 2;
+            /* 移除 transform: scaleX(-1); */
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            /* font-size: 24px; */
+            font-size: 100px;
+            text-shadow: 0 0 10px rgba(0,0,0,0.8);
+            z-index: 10;
+        }
+        .instruction {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            color: #fff;
+            font-weight: bold;
+            text-shadow: 0 0 5px #000;
+            z-index: 3;
+            pointer-events: none;
+            text-align: right;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="loading">系統載入中...<br>請允許攝影機權限</div>
+<!-- <div class="instruction">
+    手勢控制：比出 1-5 顯示數字<br>
+    特效觸發：握拳 -> 張開手掌
+</div> -->
+
+<video id="video-element"></video>
+<canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    
+    let particles = [];
+    let particleText = "";
+    let isExploded = false; 
+    let hue = 0; 
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    class Particle {
+        constructor(x, y) {
+            this.x = Math.random() * width;
+            this.y = Math.random() * height;
+            this.targetX = x;
+            this.targetY = y;
+            this.vx = 0;
+            this.vy = 0;
+            this.size = Math.random() * 3 + 2; 
+            this.color = `hsl(${Math.random() * 60 + 10}, 100%, 70%)`; 
+            this.friction = 0.93;
+            this.ease = 0.15;
+        }
+
+        update() {
+            const dx = this.targetX - this.x;
+            const dy = this.targetY - this.y;
+            
+            this.vx += dx * this.ease;
+            this.vy += dy * this.ease;
+            this.vx *= this.friction;
+            this.vy *= this.friction;
+
+            this.x += this.vx;
+            this.y += this.vy;
+            
+            if (isExploded) {
+               this.color = `hsl(${hue + Math.random() * 60}, 100%, 60%)`;
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function createTextParticles(text, isFinal = false) {
+        if (text === particleText) return;
+        particleText = text;
+
+        const tCanvas = document.createElement('canvas');
+        const tCtx = tCanvas.getContext('2d');
+        tCanvas.width = width;
+        tCanvas.height = height;
+
+        let fontSize = isFinal ? Math.min(width / 10, 150) : Math.min(width / 2, 400);
+        tCtx.font = `900 ${fontSize}px Arial`;
+        tCtx.fillStyle = 'white';
+        tCtx.textAlign = 'center';
+        tCtx.textBaseline = 'middle';
+        
+        if (isFinal) {
+            tCtx.fillText("Happy New Year", width / 2, height / 2 - fontSize * 0.6);
+            tCtx.fillText("2026", width / 2, height / 2 + fontSize * 0.6);
+        } else {
+            tCtx.fillText(text, width / 2, height / 2);
+        }
+
+        const imageData = tCtx.getImageData(0, 0, width, height).data;
+        const newTargets = [];
+        const gap = 6; 
+
+        for (let y = 0; y < height; y += gap) {
+            for (let x = 0; x < width; x += gap) {
+                const index = (y * width + x) * 4;
+                if (imageData[index + 3] > 128) {
+                    newTargets.push({ x, y });
+                }
+            }
+        }
+
+        if (particles.length < newTargets.length) {
+            const diff = newTargets.length - particles.length;
+            for (let i = 0; i < diff; i++) {
+                particles.push(new Particle(width/2, height/2));
+            }
+        } else if (particles.length > newTargets.length) {
+            particles.splice(newTargets.length);
+        }
+
+        if (isFinal) {
+             newTargets.sort(() => Math.random() - 0.5);
+        }
+
+        particles.forEach((p, i) => {
+            p.targetX = newTargets[i].x;
+            p.targetY = newTargets[i].y;
+            if (isFinal) {
+                p.vx = (Math.random() - 0.5) * 50;
+                p.vy = (Math.random() - 0.5) * 50;
+            }
+        });
+    }
+
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+
+        hue += 2;
+
+        particles.forEach(p => {
+            p.update();
+            p.draw();
+        });
+        requestAnimationFrame(animate);
+    }
+    animate();
+
+    const videoElement = document.getElementById('video-element');
+    let handClosedState = false;
+
+    function onResults(results) {
+        document.getElementById('loading').style.display = 'none';
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            const fingers = countFingers(landmarks);
+
+            if (!isExploded) {
+                if (fingers === 0) {
+                    handClosedState = true;
+                    createTextParticles("Ready?");
+                } 
+                else if (handClosedState && fingers === 5) {
+                    isExploded = true;
+                    createTextParticles("2026", true);
+                } 
+                else {
+                    handClosedState = false;
+                    if (fingers > 0) {
+                        createTextParticles(fingers.toString());
+                    } else {
+                         createTextParticles(""); 
+                    }
+                }
+            }
+        }
+    }
+
+    function countFingers(landmarks) {
+        let count = 0;
+        const tips = [8, 12, 16, 20]; 
+        const pips = [6, 10, 14, 18];
+
+        for (let i = 0; i < 4; i++) {
+            if (landmarks[tips[i]].y < landmarks[pips[i]].y) {
+                count++;
+            }
+        }
+
+        const thumbTip = landmarks[4];
+        const thumbIp = landmarks[3];
+        const pinkyMcp = landmarks[17];
+        
+        const tipDist = Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y);
+        const ipDist = Math.hypot(thumbIp.x - pinkyMcp.x, thumbIp.y - pinkyMcp.y);
+        
+        if (tipDist > ipDist) {
+            count++;
+        }
+
+        return count;
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+    camera.start();
+
+</script>
+</body>
+</html>
